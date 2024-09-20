@@ -3,6 +3,7 @@
 #include <cassert>
 #include <string>
 #include <memory>
+#include "Library/Logger/Logger.h"
 
 #include <SDL_syswm.h>
 #ifdef None
@@ -171,22 +172,30 @@ void SdlWindow::activate() {
 }
 
 std::unique_ptr<PlatformOpenGLContext> SdlWindow::createOpenGLContext(const PlatformOpenGLOptions &options) {
-    int version;
+    Logger *logger = _state->logger();
 
-    if (options.versionMajor != -1)
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, options.versionMajor);
+    logger->debug("Creating OpenGL context with options: versionMajor={}, versionMinor={}, profile={}",
+                  options.versionMajor, options.versionMinor, static_cast<int>(options.profile));
 
-    if (options.versionMinor != -1)
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, options.versionMinor);
+    // Set OpenGL ES context
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    
+    // Request OpenGL ES 3.0 context
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 
-    if (options.depthBits != -1)
+    if (options.depthBits != -1) {
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, options.depthBits);
+        logger->debug("Set GL_DEPTH_SIZE to {}", options.depthBits);
+    }
 
-    if (options.stencilBits != -1)
+    if (options.stencilBits != -1) {
         SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, options.stencilBits);
+        logger->debug("Set GL_STENCIL_SIZE to {}", options.stencilBits);
+    }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, translatePlatformOpenGLProfile(options.profile));
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, options.doubleBuffered);
+    logger->debug("Set GL_DOUBLEBUFFER to {}", options.doubleBuffered);
 
     SDL_GLContext ctx = SDL_GL_CreateContext(_window);
     if (!ctx) {
@@ -194,14 +203,22 @@ std::unique_ptr<PlatformOpenGLContext> SdlWindow::createOpenGLContext(const Plat
         return nullptr;
     }
 
+    logger->info("OpenGL ES context created successfully");
+
     int vsyncValue = translatePlatformVSyncMode(options.vsyncMode);
+    logger->debug("Setting VSync mode to {}", vsyncValue);
 
     int status = SDL_GL_SetSwapInterval(vsyncValue);
-    if (status < 0 && options.vsyncMode == GL_VSYNC_ADAPTIVE)
-        status = SDL_GL_SetSwapInterval(translatePlatformVSyncMode(GL_VSYNC_NORMAL)); // Retry with normal vsync.
+    if (status < 0 && options.vsyncMode == GL_VSYNC_ADAPTIVE) {
+        logger->warning("Adaptive VSync not supported, falling back to normal VSync");
+        status = SDL_GL_SetSwapInterval(translatePlatformVSyncMode(GL_VSYNC_NORMAL));
+    }
 
-    if (status < 0)
-        _state->logSdlError("SDL_GL_SetSwapInterval"); // Not a critical error, we still return context in this case.
+    if (status < 0) {
+        _state->logSdlError("SDL_GL_SetSwapInterval");
+    } else {
+        logger->info("VSync mode set successfully");
+    }
 
     return std::make_unique<SdlOpenGLContext>(_state, _window, ctx);
 }

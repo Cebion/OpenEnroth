@@ -4591,6 +4591,10 @@ bool OpenGLRenderer::SwitchToWindow() {
     return true;
 }
 
+static void* GLADloadproc(void* userptr, const char* name) {
+    auto context = static_cast<PlatformOpenGLContext*>(userptr);
+    return reinterpret_cast<void*>(context->getProcAddress(name));
+}
 
 bool OpenGLRenderer::Initialize() {
     if (!BaseRenderer::Initialize()) {
@@ -4600,58 +4604,55 @@ bool OpenGLRenderer::Initialize() {
     if (window != nullptr) {
         PlatformOpenGLOptions opts;
 
-        // Set it only on startup as currently we don't support multiple contexts to be able to switch OpenGL<->OpenGLES in the middle of runtime.
-        OpenGLES = config->graphics.Renderer.value() == RENDERER_OPENGL_ES;
+        // Force OpenGL ES
+        OpenGLES = true;
+        logger->info("Forcing use of OpenGL ES renderer");
 
-        if (!OpenGLES) {
-            //  Use OpenGL 4.1 core
-            opts.versionMajor = 4;
-            opts.versionMinor = 1;
-            opts.profile = GL_PROFILE_CORE;
-        } else {
-            //  Use OpenGL ES 3.2
-            opts.versionMajor = 3;
-            opts.versionMinor = 2;
-            opts.profile = GL_PROFILE_ES;
-        }
+        // Use OpenGL ES 3.2
+        opts.versionMajor = 3;
+        opts.versionMinor = 2;
+        opts.profile = GL_PROFILE_ES;
 
-        //  Turn on 24bit Z buffer.
-        //  You may need to change this to 16 or 32 for your system
+        // Turn on 24bit Z buffer.
         opts.depthBits = 24;
         opts.stencilBits = 8;
 
         opts.vsyncMode = config->graphics.VSync.value() ? GL_VSYNC_ADAPTIVE : GL_VSYNC_NONE;
 
+        logger->info("Initializing OpenGL ES context...");
         application->initializeOpenGLContext(opts);
 
-        auto gladLoadFunc = [](void *ptr, const char *name) {
-            return reinterpret_cast<GLADapiproc>(static_cast<PlatformOpenGLContext *>(ptr)->getProcAddress(name));
-        };
+        logger->info("Loading OpenGL ES functions with GLAD...");
+        GLADuserptrloadfunc gladLoadFunc = reinterpret_cast<GLADuserptrloadfunc>(reinterpret_cast<void*>(GLADloadproc));
+        int version = gladLoadGLES2UserPtr(gladLoadFunc, openGLContext);
 
-        int version;
-        if (OpenGLES)
-            version = gladLoadGLES2UserPtr(gladLoadFunc, openGLContext);
-        else
-            version = gladLoadGLUserPtr(gladLoadFunc, openGLContext);
+        if (!version) {
+            logger->error("GLAD: Failed to initialize the OpenGL ES loader");
+            return false;
+        }
 
-        if (!version)
-            logger->warning("GLAD: Failed to initialize the OpenGL loader");
+        logger->info("SDL2: supported OpenGL: {}", reinterpret_cast<const char *>(glGetString(GL_VERSION)));
+        logger->info("SDL2: supported GLSL: {}", reinterpret_cast<const char *>(glGetString(GL_SHADING_LANGUAGE_VERSION)));
+        logger->info("SDL2: OpenGL ES version: {}.{}", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
 
-        if (version) {
-            logger->info("SDL2: supported OpenGL: {}", reinterpret_cast<const char *>(glGetString(GL_VERSION)));
-            logger->info("SDL2: supported GLSL: {}", reinterpret_cast<const char *>(glGetString(GL_SHADING_LANGUAGE_VERSION)));
-            logger->info("SDL2: OpenGL version: {}.{}", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
+        // Add this check here
+        if (glClearDepthf == nullptr) {
+            logger->error("glClearDepthf is not available in this OpenGL ES implementation");
+            return false;
         }
 
         gladSetGLPostCallback(GL_Check_Errors);
 
+        logger->info("Initializing ImGui...");
         _initImGui();
 
+        logger->info("Reinitializing renderer...");
         return Reinitialize(true);
     }
 
     return false;
 }
+
 
 void OpenGLRenderer::_initImGui() {
     IMGUI_CHECKVERSION();
